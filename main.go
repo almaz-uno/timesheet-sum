@@ -2,8 +2,11 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tealeg/xlsx"
@@ -22,15 +25,25 @@ const tgtSheetName = "summary"
 var fields = []string{"key", "theme", "hours", "days"}
 
 func main() {
-	err := processFile("./testdata/Ковров_Максим_Валериевич_2021_01_01_2021_01_31.xlsx")
+	flag.Parse()
+	flag.Usage = func() {
+		pn := filepath.Base(os.Args[0])
+		fmt.Fprintf(os.Stderr, "Использование %s:\n", pn)
+		fmt.Fprintf(os.Stderr, "%s <xlsx-файл-выгрузки-из-JIRA> \n", pn)
+	}
+	if flag.NArg() < 1 {
+		flag.Usage()
+		os.Exit(2)
+	}
+	err := processFile(flag.Arg(0))
 	if err != nil {
 		log.Fatalf("Произошла ошибка разбора файла: %s", err)
 	}
 	log.Println("Done.")
 }
 
-func processFile(xlsxFile string) error {
-	xf, err := xlsx.OpenFile(xlsxFile)
+func processFile(srcFile string) error {
+	xf, err := xlsx.OpenFile(srcFile)
 	if err != nil {
 		return err
 	}
@@ -49,16 +62,13 @@ func processFile(xlsxFile string) error {
 		}
 	}
 
-	_ = srcSheet
-	_ = tgtSheet
-
 	tgtData, keys := extract(srcSheet)
 
 	fmt.Println(toString(tgtData, keys))
 
 	addData(tgtSheet, tgtData, keys)
 
-	return xf.Save("./testdata/tgt.xlsx")
+	return xf.Save(srcFile)
 }
 
 func extract(srcSheet *xlsx.Sheet) (map[string]*odata, []string) {
