@@ -49,5 +49,35 @@ func processFile(xlsxFile string) error {
 	_ = srcSheet
 	_ = tgtSheet
 
+	tgtData := make(map[string]*odata)
+	keys := []string{}
+
+	for r := 1; r < srcSheet.MaxRow; r++ {
+		key := srcSheet.Cell(r, 0).Value
+		theme := srcSheet.Cell(r, 1).Value
+		hours, _ := srcSheet.Cell(r, 2).Float()
+
+		var d *odata = nil
+		for _, k := range keys {
+			if k == key {
+				d = tgtData[key]
+				break
+			}
+		}
+		if d == nil {
+			d = new(odata)
+			keys = append(keys, key)
+			tgtData[key] = d
+		}
+
+		d.key = key
+		d.theme = theme
+		d.hours += hours
+	}
+
+	for _, d := range tgtData {
+		log.Printf("\tkey ⇒ %-10v theme ⇒ %-40v hours ⇒ %6.2f", d.key, d.theme, d.hours)
+	}
+
 	return xf.Save("./testdata/tgt.xlsx")
 }
