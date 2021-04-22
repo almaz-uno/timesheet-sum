@@ -1,11 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
+	"net/http"
+	"os"
 	"strings"
 
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/kr/pretty"
 	"github.com/tealeg/xlsx"
 )
 
@@ -22,21 +29,92 @@ const tgtSheetName = "summary"
 var fields = []string{"key", "theme", "hours", "days"}
 
 func main() {
-	err := processFile("./testdata/Ковров_Максим_Валериевич_2021_01_01_2021_01_31.xlsx")
-	if err != nil {
-		log.Fatalf("Произошла ошибка разбора файла: %s", err)
+	apiToken := os.Getenv("TELEGRAM_APITOKEN")
+	if len(apiToken) == 0 {
+		log.Fatalf("Задайте переменную окружения TELEGRAM_APITOKEN")
 	}
+	bot, err := tgbotapi.NewBotAPI(apiToken)
+	if err != nil {
+		log.Fatalf("Ошибка открытия Telegram API: %s", err.Error())
+	}
+
+	bot.Debug = true
+	ucfg := tgbotapi.UpdateConfig{
+		Offset:  0,
+		Timeout: 30,
+	}
+	updates := bot.GetUpdatesChan(ucfg)
+
+	for u := range updates {
+		if u.Message == nil {
+			continue
+		}
+		pretty.Println("update:", u)
+
+		replyText := func(text string) {
+			msg := tgbotapi.NewMessage(u.Message.Chat.ID, text)
+			msg.ReplyToMessageID = u.Message.MessageID
+			if _, e2 := bot.Send(msg); e2 != nil {
+				log.Printf("Ошибка отправки ответа: %s", e2)
+			}
+		}
+
+		if u.Message.Document == nil {
+			replyText("Пришлите xlsx-документ выгрузки из JIRA")
+			continue
+		}
+
+		fi, err := bot.GetFile(tgbotapi.FileConfig{FileID: u.Message.Document.FileID})
+		if err != nil {
+			replyText("Произошла ошибка получения файла")
+			log.Println("Ошибка получения информации о файле:", err)
+			continue
+		}
+		fileURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", apiToken, fi.FilePath)
+
+		res, err := http.Get(fileURL)
+		if err != nil {
+			replyText("Произошла ошибка получения файла" + fi.FilePath)
+			log.Printf("Ошибка получения файла %s: %s", fi.FilePath, err)
+			continue
+		}
+		defer res.Body.Close()
+
+		bb, err := processXlsx(res.Body)
+		if err != nil {
+			replyText("Произошла ошибка обработки файла: " + err.Error())
+			log.Printf("Произошла ошибка обработки файла %s: %s", fi.FilePath, err)
+			continue
+		}
+
+		msgDoc := tgbotapi.NewDocument(u.Message.Chat.ID, tgbotapi.FileBytes{
+			Name:  u.Message.Document.FileName,
+			Bytes: bb,
+		})
+
+		msgDoc.ReplyToMessageID = u.Message.MessageID
+
+		if _, e2 := bot.Send(msgDoc); e2 != nil {
+			log.Printf("Ошибка отправки ответа: %s", e2)
+		}
+
+	}
+
 	log.Println("Done.")
 }
 
-func processFile(xlsxFile string) error {
-	xf, err := xlsx.OpenFile(xlsxFile)
+func processXlsx(srcXlsx io.Reader) ([]byte, error) {
+	bb, err := ioutil.ReadAll(srcXlsx)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	xf, err := xlsx.OpenBinary(bb)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(xf.Sheets) == 0 {
-		return errors.New("книга пустая")
+		return nil, errors.New("книга пустая")
 	}
 
 	srcSheet := xf.Sheets[0]
@@ -45,12 +123,9 @@ func processFile(xlsxFile string) error {
 	if !ok {
 		tgtSheet, err = xf.AddSheet(tgtSheetName)
 		if err != nil {
-			return fmt.Errorf("не удалось добавить целевой лист %s: %w", tgtSheetName, err)
+			return nil, fmt.Errorf("не удалось добавить целевой лист %s: %w", tgtSheetName, err)
 		}
 	}
-
-	_ = srcSheet
-	_ = tgtSheet
 
 	tgtData, keys := extract(srcSheet)
 
@@ -58,7 +133,14 @@ func processFile(xlsxFile string) error {
 
 	addData(tgtSheet, tgtData, keys)
 
-	return xf.Save("./testdata/tgt.xlsx")
+	buff := &bytes.Buffer{}
+
+	err = xf.Write(buff)
+	if err != nil {
+		return nil, err
+	}
+
+	return buff.Bytes(), nil
 }
 
 func extract(srcSheet *xlsx.Sheet) (map[string]*odata, []string) {
