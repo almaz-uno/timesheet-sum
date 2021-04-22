@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/tealeg/xlsx"
 )
@@ -17,6 +18,8 @@ type (
 )
 
 const tgtSheetName = "summary"
+
+var fields = []string{"key", "theme", "hours", "days"}
 
 func main() {
 	err := processFile("./testdata/Ковров_Максим_Валериевич_2021_01_01_2021_01_31.xlsx")
@@ -49,7 +52,17 @@ func processFile(xlsxFile string) error {
 	_ = srcSheet
 	_ = tgtSheet
 
-	tgtData := make(map[string]*odata)
+	tgtData, keys := extract(srcSheet)
+
+	fmt.Println(toString(tgtData, keys))
+
+	addData(tgtSheet, tgtData, keys)
+
+	return xf.Save("./testdata/tgt.xlsx")
+}
+
+func extract(srcSheet *xlsx.Sheet) (map[string]*odata, []string) {
+	tgtData := map[string]*odata{}
 	keys := []string{}
 
 	for r := 1; r < srcSheet.MaxRow; r++ {
@@ -75,9 +88,39 @@ func processFile(xlsxFile string) error {
 		d.hours += hours
 	}
 
-	for _, d := range tgtData {
-		log.Printf("\tkey ⇒ %-10v theme ⇒ %-40v hours ⇒ %6.2f", d.key, d.theme, d.hours)
+	return tgtData, keys
+}
+
+func toString(tgtData map[string]*odata, keys []string) string {
+	b := &strings.Builder{}
+	for _, k := range keys {
+		d := tgtData[k]
+		fmt.Fprintf(b, "\tkey ⇒ %-10v theme ⇒ %-40v hours ⇒ %6.2f\n", d.key, d.theme, d.hours)
+	}
+	return b.String()
+}
+
+func addData(tgtSheet *xlsx.Sheet, tgtData map[string]*odata, keys []string) {
+	row := tgtSheet.AddRow()
+	for _, f := range fields {
+		cell := row.AddCell()
+		st := cell.GetStyle()
+		st.Font.Bold = true
+		st.Alignment.Horizontal = "center"
+		st.ApplyAlignment = true
+		st.ApplyFont = true
+		cell.SetString(f)
 	}
 
-	return xf.Save("./testdata/tgt.xlsx")
+	for _, k := range keys {
+		d := tgtData[k]
+		row = tgtSheet.AddRow()
+
+		row.AddCell().SetString(d.key)
+		row.AddCell().SetString(d.theme)
+
+		row.AddCell().SetFloat(d.hours)
+		row.AddCell().SetFloat(d.hours / 8.0)
+
+	}
 }
